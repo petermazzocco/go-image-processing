@@ -1,43 +1,51 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
+	"crypto/tls"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"sort"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httprate"
 	"github.com/gorilla/sessions"
-	"github.com/h2non/bimg"
 	"github.com/joho/godotenv"
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
 	"github.com/markbates/goth/providers/google"
 	"github.com/petermazzocco/go-image-project/internal/auth"
+	"github.com/petermazzocco/go-image-project/internal/handlers"
+	"github.com/petermazzocco/go-image-project/models"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-type User struct {
-	ID        uint `gorm:"primarykey"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	DeletedAt gorm.DeletedAt `gorm:"index"`
-	Name      string         `gorm:"size:255;not null"`
-	Email     string         `gorm:"size:255;not null;unique"`
-}
+// 1. User authenticates
+// 2. User uploads image → Store ORIGINAL in R2 → Save metadata in PostgreSQL
+// 3. User applies transformations in frontend
+// 4. Send transformation parameters to backend
+// 5. Backend processes original from R2 → Store PROCESSED version in R2
+// 6. Update PostgreSQL with processed image metadata
+// 7. Return URLs to both original and processed versions
 
 func main() {
 	// Initialize environment variables
 	if err := godotenv.Load(); err != nil {
-		log.Fatal("Error loading .env file")
+		log.Fatal("Error loading .env file", err)
 	}
+
+	accountID := os.Getenv("ACCOUNT_ID")
+	accessKeyID := os.Getenv("ACCESS_KEY_ID")
+	accessKeySecret := os.Getenv("ACCESS_KEY_SECRET")
 
 	// Chi
 	r := chi.NewRouter()
@@ -58,7 +66,7 @@ func main() {
 	sort.Strings(keys)
 
 	// Session store
-	secretKey := os.Getenv("SECRET_KEY")
+	secretKey := os.Getenv("JWT_SECRET_KEY")
 	key := secretKey
 	maxAge := 86400 * 30
 	isProd := false
@@ -77,50 +85,42 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	// Auto migrate models
-	if err := db.AutoMigrate(User{}); err != nil {
+	if err := db.AutoMigrate(models.User{}, models.Image{}); err != nil {
 		log.Fatalf("Failed to auto migrate models: %v", err)
 	}
+	// Create custom HTTP client with TLS config
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			MaxVersion: tls.VersionTLS13,
+			// Force modern cipher suites
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			},
+		},
+	}
+
+	httpClient := &http.Client{Transport: tr}
+
+	// AWS S3 configuration
+	cfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithHTTPClient(httpClient),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyID, accessKeySecret, "")),
+		config.WithRegion("auto"),
+	)
+	if err != nil {
+		log.Fatal("ERR CONFIG:", err)
+	}
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(fmt.Sprintf("https://%s.r2.cloudflarestorage.com", accountID))
+	})
 
 	// User auth
 	r.Get("/auth/{provider}/callback", func(w http.ResponseWriter, r *http.Request) {
-		user, err := gothic.CompleteUserAuth(w, r)
-		if err != nil {
-			log.Println(w, err)
-			return
-		}
-
-		var dbUser User
-		if err := db.Where("email = ?", user.Email).First(&dbUser).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				dbUser = User{
-					Name:  user.Name,
-					Email: user.Email,
-				}
-				if err := db.Create(&dbUser).Error; err != nil {
-					log.Println("Failed to create user:", err)
-					http.Error(w, "Failed to create user", http.StatusInternalServerError)
-					return
-				}
-			} else {
-				log.Println("Database error:", err)
-				http.Error(w, "Database error", http.StatusInternalServerError)
-				return
-			}
-		}
-
-		session, err := gothic.Store.Get(r, "gothic_session")
-		if err != nil {
-			log.Println("Failed to get session:", err)
-			http.Error(w, "Failed to get session", http.StatusInternalServerError)
-			return
-		}
-		session.Values["user_id"] = dbUser.ID
-
-		if err := session.Save(r, w); err != nil {
-			log.Println("Failed to save session:", err)
-			http.Error(w, "Failed to save session", http.StatusInternalServerError)
-			return
-		}
+		handlers.UserLoginHandler(w, r, db)
 	})
 	r.Post("/logout/{provider}", func(w http.ResponseWriter, r *http.Request) {
 		gothic.Logout(w, r)
@@ -141,39 +141,17 @@ func main() {
 			1*time.Minute,
 			httprate.WithKeyFuncs(httprate.KeyByIP, httprate.KeyByEndpoint),
 		))
+		r.Post("/upload", func(w http.ResponseWriter, r *http.Request) {
+			handlers.UploadImageHandler(w, r, db, client)
+		})
 		r.Post("/transform", func(w http.ResponseWriter, r *http.Request) {
-			var o bimg.Options
-			if err := json.NewDecoder(r.Body).Decode(&o); err != nil {
-				http.Error(w, "Invalid transformation options", http.StatusBadRequest)
-				return
-			}
+			handlers.TransformImage(w, r, db)
+		})
+		r.Route("/user", func(r chi.Router) {
+			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+				handlers.GetUserHandler(w, r, db)
+			})
 
-			err := r.ParseMultipartForm(10 << 20)
-			if err != nil {
-				log.Println(err)
-				http.Error(w, "Error parsing form", http.StatusBadRequest)
-				return
-			}
-
-			file, header, err := r.FormFile("image")
-			if err != nil {
-				log.Println(err)
-				http.Error(w, "Error getting file", http.StatusBadRequest)
-				return
-			}
-			defer file.Close()
-
-			fileData, err := io.ReadAll(file)
-			if err != nil {
-				log.Println(err)
-				http.Error(w, "Error reading file data", http.StatusBadRequest)
-				return
-			}
-
-			processedImage, err := bimg.NewImage(fileData).Process(o)
-			bimg.Write(header.Filename, processedImage)
-			w.WriteHeader(http.StatusOK)
-			w.Write(processedImage)
 		})
 	})
 
