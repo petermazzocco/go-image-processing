@@ -29,20 +29,11 @@ import (
 	"gorm.io/gorm"
 )
 
-// 1. User authenticates
-// 2. User uploads image → Store ORIGINAL in R2 → Save metadata in PostgreSQL
-// 3. User applies transformations in frontend
-// 4. Send transformation parameters to backend
-// 5. Backend processes original from R2 → Store PROCESSED version in R2
-// 6. Update PostgreSQL with processed image metadata
-// 7. Return URLs to both original and processed versions
-
 func main() {
 	// Initialize environment variables
 	if err := godotenv.Load(); err != nil {
 		log.Fatal("Error loading .env file", err)
 	}
-
 	accountID := os.Getenv("ACCOUNT_ID")
 	accessKeyID := os.Getenv("ACCESS_KEY_ID")
 	accessKeySecret := os.Getenv("ACCESS_KEY_SECRET")
@@ -84,16 +75,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
+
 	// Auto migrate models
 	if err := db.AutoMigrate(models.User{}, models.Image{}); err != nil {
 		log.Fatalf("Failed to auto migrate models: %v", err)
 	}
+
 	// Create custom HTTP client with TLS config
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			MaxVersion: tls.VersionTLS13,
-			// Force modern cipher suites
 			CipherSuites: []uint16{
 				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
 				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
@@ -102,7 +94,6 @@ func main() {
 			},
 		},
 	}
-
 	httpClient := &http.Client{Transport: tr}
 
 	// AWS S3 configuration
@@ -145,13 +136,10 @@ func main() {
 			handlers.UploadImageHandler(w, r, db, client)
 		})
 		r.Post("/transform", func(w http.ResponseWriter, r *http.Request) {
-			handlers.TransformImage(w, r, db)
+			handlers.TransformImage(w, r, db, client)
 		})
-		r.Route("/user", func(r chi.Router) {
-			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-				handlers.GetUserHandler(w, r, db)
-			})
-
+		r.Get("/user", func(w http.ResponseWriter, r *http.Request) {
+			handlers.GetUserHandler(w, r, db)
 		})
 	})
 

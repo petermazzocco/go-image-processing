@@ -49,7 +49,7 @@ The server will start on port 3000.
 3. Receive processed images in response
 
 ## Transformation JSON
-Pass in a JSON object with transformation options like so:
+Pass in a JSON object into the body with transformation options on the `/api/transform` POST call, like so:
 ```
 {
   "height": 800,
