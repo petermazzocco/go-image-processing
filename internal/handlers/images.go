@@ -202,3 +202,33 @@ func CleanURL(urlStr string) string {
 
 	return parsedURL.String()
 }
+
+func GetImagesForUserHandler(w http.ResponseWriter, r *http.Request, db *gorm.DB, client *s3.Client) {
+	// Grab user ID from the middleware context
+	// userID, ok := r.Context().Value("userID").(string)
+	// if !ok {
+	// 	http.Error(w, "User ID not found in context", http.StatusUnauthorized)
+	// 	return
+	// }
+	userID := "1"
+
+	// Grab all image metadata a user has
+	var images []models.Image
+	result := db.Where("user_id = ?", userID).Find(&images)
+	if result.Error != nil {
+		log.Println("ERROR RESULT: ", result.Error)
+		http.Error(w, "Invalid user ID for images", http.StatusUnauthorized)
+		return
+	}
+
+	var imageURLS []string
+	for _, image := range images {
+		cleanURL := CleanURL(fmt.Sprintf("https://pub-db15105d60d0480390aa2f77bde9915d.r2.dev/%s", image.R2Key))
+		imageURLS = append(imageURLS, cleanURL)
+	}
+	response := map[string]any{
+		"message":    "Fetched images successfully",
+		"image_urls": imageURLS,
+	}
+	json.NewEncoder(w).Encode(response)
+}
