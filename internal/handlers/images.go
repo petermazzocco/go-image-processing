@@ -22,6 +22,8 @@ import (
 	"gorm.io/gorm"
 )
 
+var publicURL = os.Getenv("PUBLIC_URL")
+
 type TransformationPayload struct {
 	ID      int          `json:"ID"`
 	Options bimg.Options `json:"Options"`
@@ -87,11 +89,10 @@ func UploadImageHandler(w http.ResponseWriter, r *http.Request, db *gorm.DB, cli
 	}
 
 	// Success response with message and url
-	cleanURL := CleanURL(fmt.Sprintf("https://pub-db15105d60d0480390aa2f77bde9915d.r2.dev/%s", r2Key))
+	cleanURL := CleanURL(fmt.Sprintf(publicURL, r2Key))
 	response := map[string]any{
 		"message": "Image uploaded successfully",
 		"url":     cleanURL,
-		"image":   image,
 	}
 	json.NewEncoder(w).Encode(response)
 }
@@ -183,12 +184,10 @@ func TransformImage(w http.ResponseWriter, r *http.Request, db *gorm.DB, client 
 	}
 
 	// Success response with message and new url for transformed image
-	cleanURL := CleanURL(fmt.Sprintf("https://pub-db15105d60d0480390aa2f77bde9915d.r2.dev/%s", transformedKey))
+	cleanURL := CleanURL(fmt.Sprintf(publicURL, transformedKey))
 	response := map[string]any{
-		"message":           "Image transformed successfully",
-		"url":               cleanURL,
-		"original_image":    image,
-		"transformed_image": transformedImage,
+		"message": "Image transformed successfully",
+		"url":     cleanURL,
 	}
 	json.NewEncoder(w).Encode(response)
 }
@@ -205,12 +204,11 @@ func CleanURL(urlStr string) string {
 
 func GetImagesForUserHandler(w http.ResponseWriter, r *http.Request, db *gorm.DB, client *s3.Client) {
 	// Grab user ID from the middleware context
-	// userID, ok := r.Context().Value("userID").(string)
-	// if !ok {
-	// 	http.Error(w, "User ID not found in context", http.StatusUnauthorized)
-	// 	return
-	// }
-	userID := "1"
+	userID, ok := r.Context().Value("userID").(string)
+	if !ok {
+		http.Error(w, "User ID not found in context", http.StatusUnauthorized)
+		return
+	}
 
 	// Grab all image metadata a user has
 	var images []models.Image
@@ -223,7 +221,7 @@ func GetImagesForUserHandler(w http.ResponseWriter, r *http.Request, db *gorm.DB
 
 	var imageURLS []string
 	for _, image := range images {
-		cleanURL := CleanURL(fmt.Sprintf("https://pub-db15105d60d0480390aa2f77bde9915d.r2.dev/%s", image.R2Key))
+		cleanURL := CleanURL(fmt.Sprintf(publicURL, image.R2Key))
 		imageURLS = append(imageURLS, cleanURL)
 	}
 	response := map[string]any{

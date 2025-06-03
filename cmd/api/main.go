@@ -22,6 +22,7 @@ import (
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/gothic"
 	"github.com/markbates/goth/providers/google"
+	"github.com/petermazzocco/go-image-project/internal/auth"
 	"github.com/petermazzocco/go-image-project/internal/handlers"
 	"github.com/petermazzocco/go-image-project/models"
 	"gorm.io/driver/postgres"
@@ -125,7 +126,7 @@ func main() {
 
 	// Available API routes for authenticated users
 	r.Route("/api", func(r chi.Router) {
-		// r.Use(auth.UserMiddleware)
+		r.Use(auth.UserMiddleware)
 		r.Use(httprate.Limit(
 			20,
 			1*time.Minute,
