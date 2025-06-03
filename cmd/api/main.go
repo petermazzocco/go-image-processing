@@ -135,14 +135,21 @@ func main() {
 		r.Post("/upload", func(w http.ResponseWriter, r *http.Request) {
 			handlers.UploadImageHandler(w, r, db, client)
 		})
-		r.Post("/transform", func(w http.ResponseWriter, r *http.Request) {
-			handlers.TransformImage(w, r, db, client)
+		r.Route("/images", func(r chi.Router) {
+			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+				handlers.GetImagesForUserHandler(w, r, db, client)
+			})
+			r.Route("/{id}", func(r chi.Router) {
+				r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+					handlers.GetImageByIDHandler(w, r, db, client)
+				})
+				r.Post("/transform", func(w http.ResponseWriter, r *http.Request) {
+					handlers.TransformImage(w, r, db, client)
+				})
+			})
 		})
 		r.Get("/user", func(w http.ResponseWriter, r *http.Request) {
 			handlers.GetUserHandler(w, r, db)
-		})
-		r.Get("/images", func(w http.ResponseWriter, r *http.Request) {
-			handlers.GetImagesForUserHandler(w, r, db, client)
 		})
 	})
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/h2non/bimg"
 	"github.com/petermazzocco/go-image-project/models"
@@ -23,11 +24,6 @@ import (
 )
 
 var publicURL = os.Getenv("PUBLIC_URL")
-
-type TransformationPayload struct {
-	ID      int          `json:"ID"`
-	Options bimg.Options `json:"Options"`
-}
 
 func UploadImageHandler(w http.ResponseWriter, r *http.Request, db *gorm.DB, client *s3.Client) {
 	// Grab user ID from the middleware context
@@ -105,9 +101,11 @@ func TransformImage(w http.ResponseWriter, r *http.Request, db *gorm.DB, client 
 		return
 	}
 
+	id := chi.URLParam(r, "id")
+
 	// JSON payload of image ID and options to transform
-	var t TransformationPayload
-	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+	var options bimg.Options
+	if err := json.NewDecoder(r.Body).Decode(&options); err != nil {
 		log.Println("ERROR DECODE: ", err)
 		http.Error(w, "Invalid transformation options", http.StatusBadRequest)
 		return
@@ -115,7 +113,7 @@ func TransformImage(w http.ResponseWriter, r *http.Request, db *gorm.DB, client 
 
 	// Grab the image metadata from the DB that matches both the image ID and the user ID
 	var image models.Image
-	result := db.Where("id = ? AND user_id = ?", t.ID, userID).First(&image)
+	result := db.Where("id = ? AND user_id = ?", id, userID).First(&image)
 	if result.Error != nil {
 		log.Println("ERROR RESULT: ", result.Error)
 		http.Error(w, "Image not found or user ID does not match", http.StatusUnauthorized)
@@ -140,7 +138,7 @@ func TransformImage(w http.ResponseWriter, r *http.Request, db *gorm.DB, client 
 		return
 	}
 
-	newImage, err := bimg.NewImage(data).Process(t.Options)
+	newImage, err := bimg.NewImage(data).Process(options)
 	if err != nil {
 		log.Println(err)
 		http.Error(w, "Error creating new image with options", http.StatusInternalServerError)
@@ -148,8 +146,8 @@ func TransformImage(w http.ResponseWriter, r *http.Request, db *gorm.DB, client 
 	}
 
 	// Generate a unique key for the transformed image
-	transformedKey := fmt.Sprintf("images/%s/transformed/%d_%s_%d",
-		userID, t.ID, image.Filename, time.Now().Unix())
+	transformedKey := fmt.Sprintf("images/%s/transformed/%s_%s_%d",
+		userID, id, image.Filename, time.Now().Unix())
 
 	// Upload the transformed image back to R2
 	contentType := "image/jpeg"
@@ -227,6 +225,33 @@ func GetImagesForUserHandler(w http.ResponseWriter, r *http.Request, db *gorm.DB
 	response := map[string]any{
 		"message":    "Fetched images successfully",
 		"image_urls": imageURLS,
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+func GetImageByIDHandler(w http.ResponseWriter, r *http.Request, db *gorm.DB, client *s3.Client) {
+	// Grab user ID from the middleware context
+	userID, ok := r.Context().Value("userID").(string)
+	if !ok {
+		http.Error(w, "User ID not found in context", http.StatusUnauthorized)
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+
+	// Grab the image metadata from the DB that matches both the image ID and the user ID
+	var image models.Image
+	result := db.Where("id = ? AND user_id = ?", id, userID).First(&image)
+	if result.Error != nil {
+		log.Println("ERROR RESULT: ", result.Error)
+		http.Error(w, "Image not found or user ID does not match", http.StatusUnauthorized)
+		return
+	}
+
+	cleanURL := CleanURL(fmt.Sprintf(publicURL, image.R2Key))
+	response := map[string]any{
+		"message": "Fetched image successfully",
+		"url":     cleanURL,
 	}
 	json.NewEncoder(w).Encode(response)
 }
