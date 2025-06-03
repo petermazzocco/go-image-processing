@@ -207,10 +207,37 @@ func GetImagesForUserHandler(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		http.Error(w, "User ID not found in context", http.StatusUnauthorized)
 		return
 	}
+	limit := chi.URLParam(r, "limit")
+	page := chi.URLParam(r, "page")
 
-	// Grab all image metadata a user has
+	// Parse and validate pagination parameters
+	limitInt, err := strconv.Atoi(limit)
+	if err != nil || limitInt <= 0 {
+		limitInt = 10 // Default limit
+	}
+
+	pageInt, err := strconv.Atoi(page)
+	if err != nil || pageInt <= 0 {
+		pageInt = 1 // Default page
+	}
+
+	// Calculate offset
+	offset := (pageInt - 1) * limitInt
+
+	// Optional: Set maximum limit to prevent abuse
+	maxLimit := 100
+	if limitInt > maxLimit {
+		limitInt = maxLimit
+	}
+
+	// Grab paginated image metadata
 	var images []models.Image
-	result := db.Where("user_id = ?", userID).Find(&images)
+	result := db.Where("user_id = ?", userID).
+		Order("created_at DESC").
+		Offset(offset).
+		Limit(limitInt).
+		Find(&images)
+
 	if result.Error != nil {
 		log.Println("ERROR RESULT: ", result.Error)
 		http.Error(w, "Invalid user ID for images", http.StatusUnauthorized)
@@ -225,6 +252,8 @@ func GetImagesForUserHandler(w http.ResponseWriter, r *http.Request, db *gorm.DB
 	response := map[string]any{
 		"message":    "Fetched images successfully",
 		"image_urls": imageURLS,
+		"page":       pageInt,
+		"limit":      limitInt,
 	}
 	json.NewEncoder(w).Encode(response)
 }

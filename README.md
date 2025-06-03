@@ -18,7 +18,11 @@ A Go-based image processing API service built for the [roadmap.sh Image Processi
 - `POST /logout/google` - Logout user
 
 ### Image Processing (Authenticated)
-- `POST /api/transform` - Transform uploaded images with specified options
+- `POST /api/upload` - Upload images with optional transformation options
+- `GET /api/images` - Get all images for authenticated user
+- `GET /api/images/{id}` - Get specific image by ID
+- `POST /api/images/{id}/transform` - Transform specific image with transformation options
+- `GET /api/user` - Get authenticated user information
 
 ## Setup
 
@@ -28,6 +32,12 @@ GOOGLE_KEY=your_google_oauth_client_id
 GOOGLE_SECRET=your_google_oauth_client_secret
 SECRET_KEY=your_session_secret_key
 DSN=your_postgresql_connection_string
+BUCKET_NAME="bucekt_name"
+ACCOUNT_ID="cloudflare-account-id"
+ACCESS_KEY_ID="cloudflare-access-key-id"
+ACCESS_KEY_SECRET="cloudflare-access-key-secret"
+JWT_SECRET_KEY="123456"
+PUBLIC_URL="cloudflare-public-url"
 ```
 
 2. Install dependencies:
@@ -45,11 +55,12 @@ The server will start on port 3000.
 ## Usage
 
 1. Authenticate via Google OAuth at `/auth/google`
-2. Upload images to `/api/transform` with transformation options
-3. Receive processed images in response
+2. Upload images to `/api/upload` with optional transformation options
+3. View your images using `/api/images` or get specific images with `/api/images/{id}`
+4. Transform existing images using `/api/images/{id}/transform`
 
 ## Transformation JSON
-Pass in a JSON object into the body with transformation options on the `/api/transform` POST call, like so:
+Pass in a JSON object into the body with transformation options on the `/api/images/{id}/transform` POST call, like so:
 ```
 {
   "height": 800,
